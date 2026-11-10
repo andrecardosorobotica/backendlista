@@ -267,6 +267,6 @@ app.use((error, req, res, next) => {
 // 11. INICIALIZAÇÃO DO SERVIDOR
 // ============================================================
 
-app.listen(PORT, () => {
-  console.log(`Servidor disponível em http://localhost:${PORT}`);
-});
+// Exporta a aplicação para a Vercel.
+// A plataforma será responsável por executar o servidor.
+export default app;
