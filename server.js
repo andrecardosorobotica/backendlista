@@ -1,229 +1,317 @@
-// ============================================================
-// 1. IMPORTAÇÕES
-// ============================================================
 
-// Express cria o servidor HTTP e organiza as rotas da API.
 import express from "express";
-
 import cors from "cors";
-
-// dotenv carrega as variáveis guardadas no arquivo .env.
-import "dotenv/config";
-
-// createClient é a função oficial para conectar ao Supabase.
 import { createClient } from "@supabase/supabase-js";
 
-// path e fileURLToPath ajudam a localizar a pasta public
-// independentemente do diretório em que o comando foi executado.
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-// ============================================================
-// 2. CONFIGURAÇÕES INICIAIS
-// ============================================================
-
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// Descobre o caminho absoluto da pasta onde este arquivo está.
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// ==========================================================
+// 1. CONFIGURAÇÕES DO SERVIDOR
+// ==========================================================
 
-// Confere se as configurações essenciais foram preenchidas.
-// É melhor interromper a inicialização do que iniciar um servidor
-// que falhará em todas as operações com o banco.
-const { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } = process.env;
+// Endereço e chave do projeto Supabase.
+// Configure essas informações nas Environment Variables da Vercel.
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY;
 
-if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
-  console.error(
-    "Configuração ausente: preencha SUPABASE_URL e SUPABASE_PUBLISHABLE_KEY no arquivo .env."
+// Verifica se as variáveis foram configuradas.
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  throw new Error(
+    "Configure SUPABASE_URL e SUPABASE_PUBLISHABLE_KEY na Vercel."
   );
-  process.exit(1);
 }
 
-// ============================================================
-// 3. CONEXÃO COM O SUPABASE
-// ============================================================
+// Conexão com o Supabase.
+const supabase = createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY
+);
 
-// O cliente é criado uma única vez e reutilizado nas rotas.
-// A chave publishable tem permissões limitadas pelo RLS do banco.
-// Como este exemplo não implementa login, as políticas SQL permitem
-// acesso público à lista. Não use este modelo com dados privados.
-const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-    detectSessionInUrl: false
-  }
-});
 
-// Autoriza a comunicação com o frontend.
-// Inicialmente aceita qualquer origem para facilitar
-// o primeiro deploy. Depois configuraremos o domínio exato.
-app.use(cors({
-    origin: process.env.FRONTEND_URL || "*"
-}));
+// ==========================================================
+// 2. CONFIGURAÇÃO DO CORS
+// ==========================================================
+
+// Domínios autorizados a acessar o backend.
+const allowedOrigins = [
+  "https://frontendlista.vercel.app",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000"
+];
+
+// Inclui também o domínio configurado na Vercel.
+if (process.env.FRONTEND_URL) {
+  allowedOrigins.push(
+    process.env.FRONTEND_URL.replace(/\/$/, "")
+  );
+}
+
+// Configuração do CORS.
+const corsOptions = {
+  origin: function (origin, callback) {
+
+    // Permite ferramentas sem Origin, como alguns testes de API.
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(
+      new Error("Origem não autorizada pelo CORS: " + origin)
+    );
+  },
+
+  methods: [
+    "GET",
+    "POST",
+    "PATCH",
+    "DELETE",
+    "OPTIONS"
+  ],
+
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization"
+  ],
+
+  optionsSuccessStatus: 204
+};
+
+// O CORS precisa ser configurado antes das rotas.
+app.use(cors(corsOptions));
+
+// Trata as requisições de preflight OPTIONS.
+app.options(/.*/, cors(corsOptions));
+
+
+// ==========================================================
+// 3. MIDDLEWARES
+// ==========================================================
 
 // Permite receber dados em formato JSON.
 app.use(express.json());
 
-// ============================================================
-// 4. MIDDLEWARES
-// ============================================================
+// Evita que respostas da API sejam armazenadas em cache.
+app.use((req, res, next) => {
+  res.setHeader(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, proxy-revalidate"
+  );
 
-// Permite que o Express interprete corpos JSON enviados pelo frontend.
-// O limite evita receber requisições JSON excessivamente grandes.
-app.use(express.json({ limit: "20kb" }));
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
 
-// Entrega arquivos estáticos da pasta public, como index.html.
-app.use(express.static(path.join(__dirname, "public")));
-
-// ============================================================
-// 5. ROTA DE TESTE
-// ============================================================
-
-// GET /api/health permite verificar se o servidor está no ar.
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", message: "API de tarefas funcionando." });
+  next();
 });
 
-// ============================================================
-// 6. LISTAR TAREFAS
-// ============================================================
 
-// GET /api/tasks
-// Busca todas as tarefas e coloca as mais recentes primeiro.
-app.get("/api/tasks", async (req, res, next) => {
+// ==========================================================
+// 4. ROTA PRINCIPAL DE TESTE
+// ==========================================================
+
+app.get("/", (req, res) => {
+  res.json({
+    message: "API da lista de tarefas funcionando!",
+    status: "online"
+  });
+});
+
+
+// ==========================================================
+// 5. ROTA DE SAÚDE DO BACKEND
+// ==========================================================
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "online",
+    message: "Backend conectado e funcionando."
+  });
+});
+
+
+// ==========================================================
+// 6. LISTAR TODAS AS TAREFAS
+// ==========================================================
+
+// Método: GET
+// Endereço: /api/tasks
+
+app.get("/api/tasks", async (req, res) => {
+
   try {
+
     const { data, error } = await supabase
       .from("tasks")
-      .select("id, title, completed, created_at, updated_at")
+      .select("*")
       .order("created_at", { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error("Erro ao buscar tarefas:", error);
 
-    res.json(data);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ============================================================
-// 7. CRIAR UMA TAREFA
-// ============================================================
-
-// POST /api/tasks
-// Espera um JSON no formato: { "title": "Estudar JavaScript" }
-app.post("/api/tasks", async (req, res, next) => {
-  try {
-    // Confere e normaliza o título antes de enviar ao banco.
-    const title = typeof req.body.title === "string"
-      ? req.body.title.trim()
-      : "";
-
-    // Validação simples para impedir tarefas vazias ou muito longas.
-    if (!title || title.length > 200) {
-      return res.status(400).json({
-        error: "Informe uma tarefa com até 200 caracteres."
+      return res.status(500).json({
+        error: "Não foi possível carregar as tarefas."
       });
     }
 
-    // Insere a tarefa. O banco gera id e datas automaticamente.
+    return res.status(200).json(data);
+
+  } catch (error) {
+
+    console.error("Erro inesperado:", error);
+
+    return res.status(500).json({
+      error: "Erro interno do servidor."
+    });
+
+  }
+
+});
+
+
+// ==========================================================
+// 7. CADASTRAR UMA NOVA TAREFA
+// ==========================================================
+
+// Método: POST
+// Endereço: /api/tasks
+// Corpo: { "title": "Minha tarefa" }
+
+app.post("/api/tasks", async (req, res) => {
+
+  try {
+
+    const { title } = req.body;
+
+    // Validação do título.
+    if (
+      typeof title !== "string" ||
+      !title.trim()
+    ) {
+      return res.status(400).json({
+        error: "Informe um título válido para a tarefa."
+      });
+    }
+
+    if (title.trim().length > 200) {
+      return res.status(400).json({
+        error: "O título deve ter no máximo 200 caracteres."
+      });
+    }
+
+    // Insere a tarefa no Supabase.
     const { data, error } = await supabase
       .from("tasks")
-      .insert({ title })
+      .insert([
+        {
+          title: title.trim(),
+          completed: false
+        }
+      ])
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error("Erro ao cadastrar tarefa:", error);
 
-    // 201 significa que um novo registro foi criado.
-    res.status(201).json(data);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ============================================================
-// 8. ATUALIZAR UMA TAREFA
-// ============================================================
-
-// PATCH /api/tasks/:id
-// Pode receber { "title": "Novo título" },
-// { "completed": true } ou os dois campos.
-app.patch("/api/tasks/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const updates = {};
-
-    // Só aceita os campos que a aplicação permite alterar.
-    // Isso impede que o cliente tente modificar id ou created_at.
-    if (Object.hasOwn(req.body, "title")) {
-      if (typeof req.body.title !== "string") {
-        return res.status(400).json({ error: "O título deve ser texto." });
-      }
-
-      const title = req.body.title.trim();
-
-      if (!title || title.length > 200) {
-        return res.status(400).json({
-          error: "O título deve ter entre 1 e 200 caracteres."
-        });
-      }
-
-      updates.title = title;
-    }
-
-    if (Object.hasOwn(req.body, "completed")) {
-      if (typeof req.body.completed !== "boolean") {
-        return res.status(400).json({
-          error: "O campo completed deve ser true ou false."
-        });
-      }
-
-      updates.completed = req.body.completed;
-    }
-
-    // Não permite uma atualização sem nenhum campo válido.
-    if (Object.keys(updates).length === 0) {
-      return res.status(400).json({
-        error: "Envie title e/ou completed para atualizar."
+      return res.status(500).json({
+        error: "Não foi possível cadastrar a tarefa."
       });
     }
 
-    // Atualiza a data de modificação junto com os campos enviados.
-    updates.updated_at = new Date().toISOString();
+    return res.status(201).json(data);
 
+  } catch (error) {
+
+    console.error("Erro inesperado:", error);
+
+    return res.status(500).json({
+      error: "Erro interno do servidor."
+    });
+
+  }
+
+});
+
+
+// ==========================================================
+// 8. ATUALIZAR UMA TAREFA
+// ==========================================================
+
+// Método: PATCH
+// Endereço: /api/tasks/:id
+// Corpo: { "completed": true }
+
+app.patch("/api/tasks/:id", async (req, res) => {
+
+  try {
+
+    const { id } = req.params;
+    const { completed } = req.body;
+
+    // Verifica se o campo completed é booleano.
+    if (typeof completed !== "boolean") {
+      return res.status(400).json({
+        error: "Informe true ou false para completed."
+      });
+    }
+
+    // Atualiza a tarefa no banco.
     const { data, error } = await supabase
       .from("tasks")
-      .update(updates)
+      .update({
+        completed: completed,
+        updated_at: new Date().toISOString()
+      })
       .eq("id", id)
       .select()
       .maybeSingle();
 
-    if (error) throw error;
+    if (error) {
+      console.error("Erro ao atualizar tarefa:", error);
 
-    // Se o ID não existir, o Supabase não retorna uma linha.
-    if (!data) {
-      return res.status(404).json({ error: "Tarefa não encontrada." });
+      return res.status(500).json({
+        error: "Não foi possível atualizar a tarefa."
+      });
     }
 
-    res.json(data);
+    if (!data) {
+      return res.status(404).json({
+        error: "Tarefa não encontrada."
+      });
+    }
+
+    return res.status(200).json(data);
+
   } catch (error) {
-    next(error);
+
+    console.error("Erro inesperado:", error);
+
+    return res.status(500).json({
+      error: "Erro interno do servidor."
+    });
+
   }
+
 });
 
-// ============================================================
-// 9. EXCLUIR UMA TAREFA
-// ============================================================
 
-// DELETE /api/tasks/:id
-// Remove do banco a tarefa cujo identificador foi informado.
-app.delete("/api/tasks/:id", async (req, res, next) => {
+// ==========================================================
+// 9. EXCLUIR UMA TAREFA
+// ==========================================================
+
+// Método: DELETE
+// Endereço: /api/tasks/:id
+
+app.delete("/api/tasks/:id", async (req, res) => {
+
   try {
+
     const { id } = req.params;
 
+    // Exclui a tarefa do Supabase.
     const { data, error } = await supabase
       .from("tasks")
       .delete()
@@ -231,42 +319,70 @@ app.delete("/api/tasks/:id", async (req, res, next) => {
       .select("id")
       .maybeSingle();
 
-    if (error) throw error;
+    if (error) {
+      console.error("Erro ao excluir tarefa:", error);
 
-    if (!data) {
-      return res.status(404).json({ error: "Tarefa não encontrada." });
+      return res.status(500).json({
+        error: "Não foi possível excluir a tarefa."
+      });
     }
 
-    // 204 indica sucesso sem conteúdo de resposta.
-    res.status(204).send();
+    if (!data) {
+      return res.status(404).json({
+        error: "Tarefa não encontrada."
+      });
+    }
+
+    // Resposta 204 não possui corpo.
+    return res.status(204).send();
+
   } catch (error) {
-    next(error);
+
+    console.error("Erro inesperado:", error);
+
+    return res.status(500).json({
+      error: "Erro interno do servidor."
+    });
+
   }
+
 });
 
-// ============================================================
-// 10. TRATAMENTO CENTRALIZADO DE ERROS
-// ============================================================
 
-// Qualquer erro encaminhado por next(error) chega aqui.
-// O detalhe técnico fica no terminal; a resposta ao navegador
-// é mais simples e não expõe configurações do servidor.
-app.use((error, req, res, next) => {
-  console.error("Erro na API:", error);
+// ==========================================================
+// 10. TRATAMENTO DE ERROS
+// ==========================================================
 
-  if (res.headersSent) {
-    return next(error);
+app.use((err, req, res, next) => {
+
+  console.error("Erro no servidor:", err);
+
+  if (err.message?.startsWith("Origem não autorizada pelo CORS")) {
+    return res.status(403).json({
+      error: "Acesso bloqueado pelo CORS."
+    });
   }
 
-  res.status(500).json({
-    error: "Ocorreu um erro interno ao processar sua solicitação."
+  return res.status(500).json({
+    error: "Erro interno do servidor."
   });
+
 });
 
-// ============================================================
-// 11. INICIALIZAÇÃO DO SERVIDOR
-// ============================================================
 
-// Exporta a aplicação para a Vercel.
-// A plataforma será responsável por executar o servidor.
+// ==========================================================
+// 11. EXPORTAÇÃO PARA A VERCEL
+// ==========================================================
+
+// A Vercel utiliza esta exportação para executar o Express.
 export default app;
+
+
+// Permite executar localmente com: node server.js
+if (process.env.VERCEL !== "1") {
+  const PORT = process.env.PORT || 3000;
+
+  app.listen(PORT, () => {
+    console.log(`Servidor executando na porta ${PORT}`);
+  });
+}
